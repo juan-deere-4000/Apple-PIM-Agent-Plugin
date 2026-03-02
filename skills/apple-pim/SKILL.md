@@ -7,7 +7,7 @@ compatibility: |
   macOS only. Requires TCC permissions for Calendars, Reminders, and Contacts via Privacy & Security settings. Mail features require Mail.app running with Automation permission granted.
 metadata:
   author: Omar Shahine
-  version: 3.0.0
+  version: 3.2.0
   mcp-server: apple-pim
 ---
 
@@ -18,7 +18,7 @@ metadata:
 Apple provides frameworks and scripting interfaces for personal information management:
 - **EventKit**: Calendars and Reminders
 - **Contacts**: Address book management
-- **Mail.app**: Local email via JXA (JavaScript for Automation)
+- **Mail.app**: Local email via JXA (JavaScript for Automation) and AppleScript
 
 EventKit and Contacts require explicit user permission via privacy prompts. Mail.app requires Automation permission and must be running.
 
@@ -133,6 +133,29 @@ When creating events or reminders, the default calendar/list is resolved in this
 
 There is no MCP tool for writing config files. Users must manually create or edit `~/.config/apple-pim/config.json`. Use `apple-pim` with action `config_init` to discover available calendars/lists, then guide the user on creating the config.
 
+### Trusted Senders (auth_check)
+
+The `auth_check` action verifies sender identity by parsing Authentication-Results headers (DKIM + SPF) against a trusted senders config.
+
+**Config file**: `~/.config/apple-pim/trusted-senders.json`
+
+```json
+{
+  "version": 1,
+  "trustedSenders": [
+    {
+      "name": "Alice",
+      "emails": ["alice@example.com"],
+      "expectedDkimDomains": ["example.com"],
+      "requireDkim": true,
+      "requireSpf": true
+    }
+  ]
+}
+```
+
+Override path with `trustedSenders` parameter: `mail({ action: "auth_check", id: "<msg-id>", trustedSenders: "~/custom/senders.json" })`
+
 ## Best Practices
 
 ### Calendar Management
@@ -182,8 +205,11 @@ When reading events/reminders, the `recurrence` array includes:
 1. **Mail.app must be running** for all operations
 2. **Use batch operations** (`mail` with action `batch_update`, `batch_delete`) for inbox triage
 3. **Use filters** (unread, flagged) for efficient message listing
-4. **Message IDs are RFC 2822** - stable across mailbox moves
+4. **Message IDs are RFC 2822** — stable across mailbox moves
 5. **Use mailbox/account hints** when available for faster lookups
+6. **Send** (`mail` with action `send`) uses AppleScript — supports `to`, `cc`, `bcc`, `from` (account selection), `subject`, `body`
+7. **Reply** (`mail` with action `reply`) preserves threading — looks up message by RFC 2822 ID, then uses Mail.app's `reply` verb
+8. **Auth check** (`mail` with action `auth_check`) verifies DKIM/SPF against `~/.config/apple-pim/trusted-senders.json` — returns `verified`, `suspicious`, `untrusted`, or `unknown`
 
 ### Error Handling
 1. **Check authorization first** with `apple-pim` action `status` when encountering errors

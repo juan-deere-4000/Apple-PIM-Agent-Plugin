@@ -7,7 +7,7 @@ compatibility: |
   macOS only. Requires TCC permissions for Calendars, Reminders, and Contacts via Privacy & Security settings. Mail features require Mail.app running with Automation permission granted.
 metadata:
   author: Omar Shahine
-  version: 3.1.0
+  version: 3.2.0
   openclaw:
     os: [darwin]
     requires:
@@ -34,7 +34,7 @@ This plugin provides 5 tools:
 | `apple_pim_calendar` | `list`, `events`, `get`, `search`, `create`, `update`, `delete`, `batch_create` | Calendar events via EventKit |
 | `apple_pim_reminder` | `lists`, `items`, `get`, `search`, `create`, `complete`, `update`, `delete`, `batch_create`, `batch_complete`, `batch_delete` | Reminders via EventKit |
 | `apple_pim_contact` | `groups`, `list`, `search`, `get`, `create`, `update`, `delete` | Contacts framework |
-| `apple_pim_mail` | `accounts`, `mailboxes`, `messages`, `get`, `search`, `update`, `move`, `delete`, `batch_update`, `batch_delete` | Mail.app via JXA |
+| `apple_pim_mail` | `accounts`, `mailboxes`, `messages`, `get`, `search`, `send`, `reply`, `update`, `move`, `delete`, `batch_update`, `batch_delete`, `auth_check` | Mail.app via JXA/AppleScript |
 | `apple_pim_system` | `status`, `authorize`, `config_show`, `config_init` | Authorization & configuration |
 
 ## Authorization & Permissions
@@ -113,6 +113,29 @@ In OpenClaw multi-agent setups (v3.1.0+), config is auto-discovered from `{works
 
 **Priority chain**: Tool parameter > workspace convention > plugin config > env var > default (`~/.config/apple-pim/`)
 
+### Trusted Senders (auth_check)
+
+The `auth_check` action verifies sender identity by parsing Authentication-Results headers (DKIM + SPF) against a trusted senders config.
+
+**Config file**: `~/.config/apple-pim/trusted-senders.json`
+
+```json
+{
+  "version": 1,
+  "trustedSenders": [
+    {
+      "name": "Alice",
+      "emails": ["alice@example.com"],
+      "expectedDkimDomains": ["example.com"],
+      "requireDkim": true,
+      "requireSpf": true
+    }
+  ]
+}
+```
+
+Override path with `trustedSenders` parameter: `apple_pim_mail({ action: "auth_check", id: "<msg-id>", trustedSenders: "~/custom/senders.json" })`
+
 ## Best Practices
 
 ### Calendar Management
@@ -146,6 +169,9 @@ In OpenClaw multi-agent setups (v3.1.0+), config is auto-discovered from `{works
 2. **Use batch operations** (`batch_update`, `batch_delete`) for inbox triage
 3. **Message IDs are RFC 2822** — stable across mailbox moves
 4. **Use mailbox/account hints** for faster lookups
+5. **Send** uses AppleScript — supports `to`, `cc`, `bcc`, `from` (account selection), `subject`, `body`
+6. **Reply** preserves threading — looks up message by RFC 2822 ID, then uses Mail.app's `reply` verb
+7. **Auth check** verifies DKIM/SPF against `~/.config/apple-pim/trusted-senders.json` — returns `verified`, `suspicious`, `untrusted`, or `unknown`
 
 ### Error Handling
 1. **Check authorization first** with `apple_pim_system` action `status`
