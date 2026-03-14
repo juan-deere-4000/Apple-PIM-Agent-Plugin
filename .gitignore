@@ -16,3 +16,37 @@ package-lock.json
 # Local configuration
 *.local.md
 notes.md
+
+# Astro build cache
+site/.astro/
+
+# AI coding tool directories
+.adal/
+.agent/
+.augment/
+.codebuddy/
+.commandcode/
+.continue/
+.cortex/
+.crush/
+.factory/
+.goose/
+.iflow/
+.junie/
+.kilocode/
+.kiro/
+.kode/
+.mcpjam/
+.mux/
+.neovate/
+.openhands/
+.pi/
+.pochi/
+.qoder/
+.qwen/
+.roo/
+.trae/
+.vibe/
+.windsurf/
+.zencoder/
+.playwright-cli/
