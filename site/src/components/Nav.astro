@@ -1,6 +1,12 @@
 ---
-import pkg from '../../../package.json';
-const version = pkg.version ? `v${pkg.version}` : '';
+import { execFileSync } from 'node:child_process';
+
+let version = '';
+try {
+  version = execFileSync('git', ['describe', '--tags', '--abbrev=0'], { encoding: 'utf-8' }).trim();
+} catch {
+  // No tags available
+}
 
 const navLinks = [
   { href: '#features', label: 'Features' },
@@ -152,4 +158,5 @@ const navLinks = [
       btn?.focus();
     }
   });
+
 </script>
