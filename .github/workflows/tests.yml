@@ -35,6 +35,27 @@ jobs:
       - name: Build MCP server
         run: npm run build
 
+  agent-evals:
+    name: Agent Evals
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install root dependencies
+        run: npm install
+
+      - name: Install eval dependencies
+        run: npm install --prefix evals
+
+      - name: Run agent evals
+        run: npm run eval
+
   swift-cli-tests:
     name: Swift CLI
     runs-on: macos-latest
