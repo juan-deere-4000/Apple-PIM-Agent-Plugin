@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { loadScenario } from "../helpers/scenario-runner.js";
 import { createMockCLI } from "../helpers/mock-cli.js";
 import { argsPairPresent } from "../helpers/grader.js";
@@ -7,11 +7,16 @@ import { handleReminder } from "../../lib/handlers/reminder.js";
 import { handleContact } from "../../lib/handlers/contact.js";
 import { handleMail } from "../../lib/handlers/mail.js";
 import { buildDryRunResponse } from "../../lib/dry-run.js";
+import { withAgentDX } from "../../lib/agent-dx.js";
+import { initAccessConfig, _resetForTesting } from "../../lib/access-control.js";
 import {
   buildCalendarCreateArgs,
   buildCalendarUpdateArgs,
   buildReminderCreateArgs,
 } from "../../lib/tool-args.js";
+import { writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const handlers = {
   calendar: handleCalendar,
@@ -393,6 +398,186 @@ describe("Category 1: Tool Call Correctness", () => {
       const mockCLI = createMockCLI({});
       await expect(handleMail({ action: "teleport" }, mockCLI))
         .rejects.toThrow("Unknown mail action");
+    });
+  });
+
+  describe("access control integration", () => {
+    const AC_TMP = join(tmpdir(), "ac-integration-tests");
+
+    function writeACConfig(config) {
+      mkdirSync(AC_TMP, { recursive: true });
+      const path = join(AC_TMP, "access.json");
+      writeFileSync(path, JSON.stringify(config));
+      return path;
+    }
+
+    beforeEach(() => {
+      _resetForTesting();
+      try { rmSync(AC_TMP, { recursive: true }); } catch {}
+    });
+
+    it("calendar create injects default calendar from access config", async () => {
+      const path = writeACConfig({
+        calendars: { mode: "allowlist", allow: ["Work", "Personal"], default: "Work" },
+      });
+      initAccessConfig(path);
+
+      const mockCLI = createMockCLI({ "calendar-cli:create": { success: true } });
+      const wrapped = withAgentDX("calendar", handleCalendar);
+      await wrapped({ action: "create", title: "Test", start: "2026-03-20T10:00:00" }, mockCLI);
+
+      const callArgs = mockCLI.mock.calls[0][1];
+      expect(argsPairPresent(callArgs, "--calendar", "Work")).toBe(true);
+    });
+
+    it("calendar create rejects read-only calendar", async () => {
+      const path = writeACConfig({
+        calendars: { mode: "allowlist", allow: ["Work"], readOnly: ["Birthdays"], default: "Work" },
+      });
+      initAccessConfig(path);
+
+      const mockCLI = createMockCLI({});
+      const wrapped = withAgentDX("calendar", handleCalendar);
+      await expect(wrapped(
+        { action: "create", title: "Test", start: "2026-03-20T10:00:00", calendar: "Birthdays" },
+        mockCLI,
+      )).rejects.toThrow("read-only");
+    });
+
+    it("calendar create rejects invisible calendar", async () => {
+      const path = writeACConfig({
+        calendars: { mode: "allowlist", allow: ["Work"], default: "Work" },
+      });
+      initAccessConfig(path);
+
+      const mockCLI = createMockCLI({});
+      const wrapped = withAgentDX("calendar", handleCalendar);
+      await expect(wrapped(
+        { action: "create", title: "Test", start: "2026-03-20T10:00:00", calendar: "Secret" },
+        mockCLI,
+      )).rejects.toThrow("not available");
+    });
+
+    it("calendar update rejects read-only calendar", async () => {
+      const path = writeACConfig({
+        calendars: { mode: "allowlist", allow: ["Work"], readOnly: ["Birthdays"] },
+      });
+      initAccessConfig(path);
+
+      const mockCLI = createMockCLI({});
+      const wrapped = withAgentDX("calendar", handleCalendar);
+      await expect(wrapped(
+        { action: "update", id: "evt_1", title: "New Title", calendar: "Birthdays" },
+        mockCLI,
+      )).rejects.toThrow("read-only");
+    });
+
+    it("calendar delete rejects blocked calendar", async () => {
+      const path = writeACConfig({
+        calendars: { mode: "blocklist", block: ["Spam"] },
+      });
+      initAccessConfig(path);
+
+      const mockCLI = createMockCLI({});
+      const wrapped = withAgentDX("calendar", handleCalendar);
+      await expect(wrapped(
+        { action: "delete", id: "evt_1", calendar: "Spam" },
+        mockCLI,
+      )).rejects.toThrow("not available");
+    });
+
+    it("reminder complete rejects read-only list", async () => {
+      const path = writeACConfig({
+        reminders: { mode: "allowlist", allow: ["Inbox"], readOnly: ["Archive"] },
+      });
+      initAccessConfig(path);
+
+      const mockCLI = createMockCLI({});
+      const wrapped = withAgentDX("reminder", handleReminder);
+      await expect(wrapped(
+        { action: "complete", id: "rem_1", list: "Archive" },
+        mockCLI,
+      )).rejects.toThrow("read-only");
+    });
+
+    it("reminder batch_delete rejects read-only list", async () => {
+      const path = writeACConfig({
+        reminders: { mode: "allowlist", allow: ["Inbox"], readOnly: ["Archive"] },
+      });
+      initAccessConfig(path);
+
+      const mockCLI = createMockCLI({});
+      const wrapped = withAgentDX("reminder", handleReminder);
+      await expect(wrapped(
+        { action: "batch_delete", ids: ["r1", "r2"], list: "Archive" },
+        mockCLI,
+      )).rejects.toThrow("read-only");
+    });
+
+    it("calendar events post-filters to visible calendars", async () => {
+      const path = writeACConfig({
+        calendars: { mode: "allowlist", allow: ["Work"], readOnly: ["Birthdays"] },
+      });
+      initAccessConfig(path);
+
+      const mockCLI = createMockCLI({
+        "calendar-cli:events": {
+          success: true,
+          events: [
+            { id: "e1", title: "Meeting", calendar: "Work" },
+            { id: "e2", title: "Birthday", calendar: "Birthdays" },
+            { id: "e3", title: "Hidden", calendar: "Secret" },
+          ],
+          count: 3,
+        },
+      });
+      const wrapped = withAgentDX("calendar", handleCalendar);
+      const result = await wrapped({ action: "events" }, mockCLI);
+
+      expect(result.events).toHaveLength(2);
+      expect(result.events.map((e) => e.calendar)).toEqual(["Work", "Birthdays"]);
+      expect(result.count).toBe(2);
+    });
+
+    it("reminder create injects default list from access config", async () => {
+      const path = writeACConfig({
+        reminders: { mode: "allowlist", allow: ["Inbox", "Shopping"], default: "Inbox" },
+      });
+      initAccessConfig(path);
+
+      const mockCLI = createMockCLI({ "reminder-cli:create": { success: true } });
+      const wrapped = withAgentDX("reminder", handleReminder);
+      await wrapped({ action: "create", title: "Buy milk" }, mockCLI);
+
+      const callArgs = mockCLI.mock.calls[0][1];
+      expect(argsPairPresent(callArgs, "--list", "Inbox")).toBe(true);
+    });
+
+    it("calendar update passes when targeting writable calendar", async () => {
+      const path = writeACConfig({
+        calendars: { mode: "allowlist", allow: ["Work"], readOnly: ["Birthdays"] },
+      });
+      initAccessConfig(path);
+
+      const mockCLI = createMockCLI({ "calendar-cli:update": { success: true } });
+      const wrapped = withAgentDX("calendar", handleCalendar);
+      // Should not throw
+      await wrapped({ action: "update", id: "evt_1", title: "Updated", calendar: "Work" }, mockCLI);
+      expect(mockCLI.mock.calls).toHaveLength(1);
+    });
+
+    it("no access config means open mode (no filtering)", async () => {
+      // initAccessConfig not called — default null config
+      const mockCLI = createMockCLI({
+        "calendar-cli:events": {
+          success: true,
+          events: [{ id: "e1", title: "A", calendar: "Anything" }],
+          count: 1,
+        },
+      });
+      const wrapped = withAgentDX("calendar", handleCalendar);
+      const result = await wrapped({ action: "events" }, mockCLI);
+      expect(result.events).toHaveLength(1);
     });
   });
 });

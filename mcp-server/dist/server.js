@@ -2998,7 +2998,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve.call(this, root, ref);
+      let _sch = resolve2.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a2 = root.localRefs) === null || _a2 === void 0 ? void 0 : _a2[ref];
         const { schemaId } = this.opts;
@@ -3025,7 +3025,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve(root, ref) {
+    function resolve2(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3601,7 +3601,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve(baseURI, relativeURI, options) {
+    function resolve2(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -3829,7 +3829,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve,
+      resolve: resolve2,
       resolveComponent,
       equal,
       serialize,
@@ -4745,6 +4745,7 @@ var require_pattern = __commonJS({
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
+    var util_1 = require_util();
     var codegen_1 = require_codegen();
     var error2 = {
       message: ({ schemaCode }) => (0, codegen_1.str)`must match pattern "${schemaCode}"`,
@@ -4757,10 +4758,18 @@ var require_pattern = __commonJS({
       $data: true,
       error: error2,
       code(cxt) {
-        const { data, $data, schema, schemaCode, it } = cxt;
+        const { gen, data, $data, schema, schemaCode, it } = cxt;
         const u = it.opts.unicodeRegExp ? "u" : "";
-        const regExp = $data ? (0, codegen_1._)`(new RegExp(${schemaCode}, ${u}))` : (0, code_1.usePattern)(cxt, schema);
-        cxt.fail$data((0, codegen_1._)`!${regExp}.test(${data})`);
+        if ($data) {
+          const { regExp } = it.opts.code;
+          const regExpCode = regExp.code === "new RegExp" ? (0, codegen_1._)`new RegExp` : (0, util_1.useFunc)(gen, regExp);
+          const valid = gen.let("valid");
+          gen.try(() => gen.assign(valid, (0, codegen_1._)`${regExpCode}(${schemaCode}, ${u}).test(${data})`), () => gen.assign(valid, false));
+          cxt.fail$data((0, codegen_1._)`!${valid}`);
+        } else {
+          const regExp = (0, code_1.usePattern)(cxt, schema);
+          cxt.fail$data((0, codegen_1._)`!${regExp}.test(${data})`);
+        }
       }
     };
     exports.default = def;
@@ -31739,6 +31748,14 @@ var require_addressparser = __commonJS({
           parsedAddresses = parsedAddresses.concat(address2);
         }
       });
+      for (let i = parsedAddresses.length - 2; i >= 0; i--) {
+        let current = parsedAddresses[i];
+        let next = parsedAddresses[i + 1];
+        if (current.address === "" && current.name && !current.group && next.address && next.name && !next.group) {
+          next.name = current.name + ", " + next.name;
+          parsedAddresses.splice(i, 1);
+        }
+      }
       if (options.flatten) {
         let addresses2 = [];
         let walkAddressList = (list) => {
@@ -44921,7 +44938,7 @@ var require_mail_parser = __commonJS({
                 value = this.libmime.decodeWords(value);
               } catch (E) {
               }
-              value = value.split(/\s+/).map(this.ensureMessageIDFormat);
+              value = value.split(/\s+/).map(this.ensureMessageIDFormat).filter((val) => val);
               break;
             case "message-id":
             case "in-reply-to":
@@ -45078,21 +45095,39 @@ var require_mail_parser = __commonJS({
           let address = addresses[i];
           address.name = (address.name || "").toString().trim();
           if (!address.address && /^(=\?([^?]+)\?[Bb]\?[^?]*\?=)(\s*=\?([^?]+)\?[Bb]\?[^?]*\?=)*$/.test(address.name) && !processedAddress.has(address)) {
-            let parsed = addressparser(this.libmime.decodeWords(address.name));
-            if (parsed.length) {
-              parsed.forEach((entry) => {
-                processedAddress.add(entry);
-                addresses.push(entry);
-              });
+            let decoded = this.libmime.decodeWords(address.name);
+            if (/<[^<>]+@[^<>]+>/.test(decoded)) {
+              let parsed = addressparser(decoded);
+              if (parsed.length) {
+                parsed.forEach((entry) => {
+                  processedAddress.add(entry);
+                  addresses.push(entry);
+                });
+              }
+              addresses.splice(i, 1);
+              i--;
+              continue;
+            } else {
+              address.name = decoded;
+              continue;
             }
-            addresses.splice(i, 1);
-            i--;
-            continue;
           }
           if (address.name) {
             try {
               address.name = this.libmime.decodeWords(address.name);
             } catch (E) {
+            }
+          }
+          if (address.address && /[=]\?[^?]+\?[BbQq]\?[^?]*\?[=]/.test(address.address)) {
+            try {
+              let decodedAddr = this.libmime.decodeWords(address.address);
+              if (/^[^\s@]+@[^\s@]+$/.test(decodedAddr) && !/[=]\?/.test(decodedAddr)) {
+                address.address = decodedAddr;
+              } else {
+                address.address = "";
+              }
+            } catch (E) {
+              address.address = "";
             }
           }
           if (/@xn--/.test(address.address)) {
@@ -45619,8 +45654,8 @@ var require_simple_parser = __commonJS({
       }
       let promise2;
       if (!callback) {
-        promise2 = new Promise((resolve, reject) => {
-          callback = callbackPromise(resolve, reject);
+        promise2 = new Promise((resolve2, reject) => {
+          callback = callbackPromise(resolve2, reject);
         });
       }
       options = options || {};
@@ -45709,13 +45744,13 @@ var require_simple_parser = __commonJS({
       }
       return promise2;
     };
-    function callbackPromise(resolve, reject) {
+    function callbackPromise(resolve2, reject) {
       return function(...args) {
         let err = args.shift();
         if (err) {
           reject(err);
         } else {
-          resolve(...args);
+          resolve2(...args);
         }
       };
     }
@@ -68779,7 +68814,7 @@ var Doc = class {
 var version = {
   major: 4,
   minor: 3,
-  patch: 5
+  patch: 6
 };
 
 // node_modules/zod/v4/core/schemas.js
@@ -70070,7 +70105,7 @@ var $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
         if (keyResult instanceof Promise) {
           throw new Error("Async schemas not supported in object keys currently");
         }
-        const checkNumericKey = typeof key === "string" && number.test(key) && keyResult.issues.length && keyResult.issues.some((iss) => iss.code === "invalid_type" && iss.expected === "number");
+        const checkNumericKey = typeof key === "string" && number.test(key) && keyResult.issues.length;
         if (checkNumericKey) {
           const retryResult = def.keyType._zod.run({ value: Number(key), issues: [] }, ctx);
           if (retryResult instanceof Promise) {
@@ -71915,7 +71950,7 @@ function finalize(ctx, schema) {
           }
         }
       }
-      if (refSchema.$ref) {
+      if (refSchema.$ref && refSeen.def) {
         for (const key in schema2) {
           if (key === "$ref" || key === "allOf")
             continue;
@@ -75714,6 +75749,9 @@ var Protocol = class {
    * The Protocol object assumes ownership of the Transport, replacing any callbacks that have already been set, and expects that it is the only user of the Transport instance going forward.
    */
   async connect(transport2) {
+    if (this._transport) {
+      throw new Error("Already connected to a transport. Call close() before connecting to a new transport, or use a separate Protocol instance per connection.");
+    }
     this._transport = transport2;
     const _onclose = this.transport?.onclose;
     this._transport.onclose = () => {
@@ -75746,6 +75784,10 @@ var Protocol = class {
     this._progressHandlers.clear();
     this._taskProgressTokens.clear();
     this._pendingDebouncedNotifications.clear();
+    for (const controller of this._requestHandlerAbortControllers.values()) {
+      controller.abort();
+    }
+    this._requestHandlerAbortControllers.clear();
     const error2 = McpError.fromError(ErrorCode.ConnectionClosed, "Connection closed");
     this._transport = void 0;
     this.onclose?.();
@@ -75796,6 +75838,8 @@ var Protocol = class {
       sessionId: capturedTransport?.sessionId,
       _meta: request.params?._meta,
       sendNotification: async (notification) => {
+        if (abortController.signal.aborted)
+          return;
         const notificationOptions = { relatedRequestId: request.id };
         if (relatedTaskId) {
           notificationOptions.relatedTask = { taskId: relatedTaskId };
@@ -75803,6 +75847,9 @@ var Protocol = class {
         await this.notification(notification, notificationOptions);
       },
       sendRequest: async (r, resultSchema, options) => {
+        if (abortController.signal.aborted) {
+          throw new McpError(ErrorCode.ConnectionClosed, "Request was cancelled");
+        }
         const requestOptions = { ...options, relatedRequestId: request.id };
         if (relatedTaskId && !requestOptions.relatedTask) {
           requestOptions.relatedTask = { taskId: relatedTaskId };
@@ -76019,7 +76066,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+        await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -76036,7 +76083,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -76114,7 +76161,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve(parseResult.data);
+            resolve2(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -76375,12 +76422,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve, interval);
+      const timeoutId = setTimeout(resolve2, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -76562,6 +76609,147 @@ var ExperimentalServerTasks = class {
    */
   requestStream(request, resultSchema, options) {
     return this._server.requestStream(request, resultSchema, options);
+  }
+  /**
+   * Sends a sampling request and returns an AsyncGenerator that yields response messages.
+   * The generator is guaranteed to end with either a 'result' or 'error' message.
+   *
+   * For task-augmented requests, yields 'taskCreated' and 'taskStatus' messages
+   * before the final result.
+   *
+   * @example
+   * ```typescript
+   * const stream = server.experimental.tasks.createMessageStream({
+   *     messages: [{ role: 'user', content: { type: 'text', text: 'Hello' } }],
+   *     maxTokens: 100
+   * }, {
+   *     onprogress: (progress) => {
+   *         // Handle streaming tokens via progress notifications
+   *         console.log('Progress:', progress.message);
+   *     }
+   * });
+   *
+   * for await (const message of stream) {
+   *     switch (message.type) {
+   *         case 'taskCreated':
+   *             console.log('Task created:', message.task.taskId);
+   *             break;
+   *         case 'taskStatus':
+   *             console.log('Task status:', message.task.status);
+   *             break;
+   *         case 'result':
+   *             console.log('Final result:', message.result);
+   *             break;
+   *         case 'error':
+   *             console.error('Error:', message.error);
+   *             break;
+   *     }
+   * }
+   * ```
+   *
+   * @param params - The sampling request parameters
+   * @param options - Optional request options (timeout, signal, task creation params, onprogress, etc.)
+   * @returns AsyncGenerator that yields ResponseMessage objects
+   *
+   * @experimental
+   */
+  createMessageStream(params, options) {
+    const clientCapabilities = this._server.getClientCapabilities();
+    if ((params.tools || params.toolChoice) && !clientCapabilities?.sampling?.tools) {
+      throw new Error("Client does not support sampling tools capability.");
+    }
+    if (params.messages.length > 0) {
+      const lastMessage = params.messages[params.messages.length - 1];
+      const lastContent = Array.isArray(lastMessage.content) ? lastMessage.content : [lastMessage.content];
+      const hasToolResults = lastContent.some((c) => c.type === "tool_result");
+      const previousMessage = params.messages.length > 1 ? params.messages[params.messages.length - 2] : void 0;
+      const previousContent = previousMessage ? Array.isArray(previousMessage.content) ? previousMessage.content : [previousMessage.content] : [];
+      const hasPreviousToolUse = previousContent.some((c) => c.type === "tool_use");
+      if (hasToolResults) {
+        if (lastContent.some((c) => c.type !== "tool_result")) {
+          throw new Error("The last message must contain only tool_result content if any is present");
+        }
+        if (!hasPreviousToolUse) {
+          throw new Error("tool_result blocks are not matching any tool_use from the previous message");
+        }
+      }
+      if (hasPreviousToolUse) {
+        const toolUseIds = new Set(previousContent.filter((c) => c.type === "tool_use").map((c) => c.id));
+        const toolResultIds = new Set(lastContent.filter((c) => c.type === "tool_result").map((c) => c.toolUseId));
+        if (toolUseIds.size !== toolResultIds.size || ![...toolUseIds].every((id) => toolResultIds.has(id))) {
+          throw new Error("ids of tool_result blocks and tool_use blocks from previous message do not match");
+        }
+      }
+    }
+    return this.requestStream({
+      method: "sampling/createMessage",
+      params
+    }, CreateMessageResultSchema, options);
+  }
+  /**
+   * Sends an elicitation request and returns an AsyncGenerator that yields response messages.
+   * The generator is guaranteed to end with either a 'result' or 'error' message.
+   *
+   * For task-augmented requests (especially URL-based elicitation), yields 'taskCreated'
+   * and 'taskStatus' messages before the final result.
+   *
+   * @example
+   * ```typescript
+   * const stream = server.experimental.tasks.elicitInputStream({
+   *     mode: 'url',
+   *     message: 'Please authenticate',
+   *     elicitationId: 'auth-123',
+   *     url: 'https://example.com/auth'
+   * }, {
+   *     task: { ttl: 300000 } // Task-augmented for long-running auth flow
+   * });
+   *
+   * for await (const message of stream) {
+   *     switch (message.type) {
+   *         case 'taskCreated':
+   *             console.log('Task created:', message.task.taskId);
+   *             break;
+   *         case 'taskStatus':
+   *             console.log('Task status:', message.task.status);
+   *             break;
+   *         case 'result':
+   *             console.log('User action:', message.result.action);
+   *             break;
+   *         case 'error':
+   *             console.error('Error:', message.error);
+   *             break;
+   *     }
+   * }
+   * ```
+   *
+   * @param params - The elicitation request parameters
+   * @param options - Optional request options (timeout, signal, task creation params, etc.)
+   * @returns AsyncGenerator that yields ResponseMessage objects
+   *
+   * @experimental
+   */
+  elicitInputStream(params, options) {
+    const clientCapabilities = this._server.getClientCapabilities();
+    const mode = params.mode ?? "form";
+    switch (mode) {
+      case "url": {
+        if (!clientCapabilities?.elicitation?.url) {
+          throw new Error("Client does not support url elicitation.");
+        }
+        break;
+      }
+      case "form": {
+        if (!clientCapabilities?.elicitation?.form) {
+          throw new Error("Client does not support form elicitation.");
+        }
+        break;
+      }
+    }
+    const normalizedParams = mode === "form" && params.mode === void 0 ? { ...params, mode: "form" } : params;
+    return this.requestStream({
+      method: "elicitation/create",
+      params: normalizedParams
+    }, ElicitResultSchema, options);
   }
   /**
    * Gets the current status of a task.
@@ -77109,12 +77297,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve) => {
+    return new Promise((resolve2) => {
       const json2 = serializeMessage(message);
       if (this._stdout.write(json2)) {
-        resolve();
+        resolve2();
       } else {
-        this._stdout.once("drain", resolve);
+        this._stdout.once("drain", resolve2);
       }
     });
   }
@@ -77300,7 +77488,7 @@ function relativeDateString(daysOffset) {
 var DEFAULT_TIMEOUT_MS = 3e4;
 function createCLIRunner(binDir, envOverrides = {}, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   async function runCLI2(cli, args) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       const cliPath = join(binDir, cli);
       const proc = spawn(cliPath, args, {
         env: { ...process.env, ...envOverrides }
@@ -77325,9 +77513,9 @@ function createCLIRunner(binDir, envOverrides = {}, { timeoutMs = DEFAULT_TIMEOU
           return;
         if (code === 0) {
           try {
-            resolve(JSON.parse(stdout));
+            resolve2(JSON.parse(stdout));
           } catch {
-            resolve({ success: true, output: stdout });
+            resolve2({ success: true, output: stdout });
           }
         } else {
           reject(new Error(stderr || `CLI exited with code ${code}`));
@@ -77950,8 +78138,255 @@ function formatRecipients(to) {
   return list.join(", ");
 }
 
+// ../lib/access-control.js
+import { readFileSync, existsSync as existsSync2 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { resolve } from "node:path";
+var _config = null;
+var _initialized = false;
+var DEFAULT_PATH = resolve(homedir2(), ".config", "apple-pim", "access.json");
+var VALID_MODES = /* @__PURE__ */ new Set(["open", "allowlist", "blocklist"]);
+var DOMAIN_MAP = {
+  calendar: "calendars",
+  reminder: "reminders"
+};
+function initAccessConfig(filePath) {
+  const resolved = filePath || process.env.APPLE_PIM_ACCESS_FILE || DEFAULT_PATH;
+  if (!existsSync2(resolved)) {
+    _config = null;
+    _initialized = true;
+    return;
+  }
+  let raw;
+  try {
+    raw = readFileSync(resolved, "utf-8");
+  } catch (err) {
+    throw new Error(`access-control: failed to read ${resolved}: ${err.message}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`access-control: invalid JSON in ${resolved}: ${err.message}`);
+  }
+  validateConfig(parsed, resolved);
+  _config = parsed;
+  _initialized = true;
+}
+function getDomainConfig(toolName) {
+  if (!_initialized)
+    return null;
+  if (!_config)
+    return null;
+  const key = DOMAIN_MAP[toolName];
+  if (!key)
+    return null;
+  return _config[key] ?? null;
+}
+function validateConfig(config2, filePath) {
+  if (typeof config2 !== "object" || config2 === null || Array.isArray(config2)) {
+    throw new Error(`access-control: config must be a JSON object (${filePath})`);
+  }
+  const validKeys = /* @__PURE__ */ new Set(["calendars", "reminders"]);
+  for (const key of Object.keys(config2)) {
+    if (!validKeys.has(key)) {
+      throw new Error(`access-control: unexpected top-level key "${key}" (${filePath})`);
+    }
+  }
+  if (config2.calendars)
+    validateDomain(config2.calendars, "calendars", filePath);
+  if (config2.reminders)
+    validateDomain(config2.reminders, "reminders", filePath);
+}
+function validateDomain(domain2, name, filePath) {
+  if (typeof domain2 !== "object" || domain2 === null || Array.isArray(domain2)) {
+    throw new Error(`access-control: "${name}" must be an object (${filePath})`);
+  }
+  const validKeys = /* @__PURE__ */ new Set(["mode", "allow", "block", "readOnly", "default"]);
+  for (const key of Object.keys(domain2)) {
+    if (!validKeys.has(key)) {
+      throw new Error(`access-control: unexpected key "${name}.${key}" (${filePath})`);
+    }
+  }
+  if (domain2.mode !== void 0 && !VALID_MODES.has(domain2.mode)) {
+    throw new Error(`access-control: "${name}.mode" must be one of: ${[...VALID_MODES].join(", ")} (${filePath})`);
+  }
+  for (const arrKey of ["allow", "block", "readOnly"]) {
+    if (domain2[arrKey] !== void 0) {
+      if (!Array.isArray(domain2[arrKey]) || !domain2[arrKey].every((v) => typeof v === "string")) {
+        throw new Error(`access-control: "${name}.${arrKey}" must be an array of strings (${filePath})`);
+      }
+    }
+  }
+  if (domain2.default !== void 0 && typeof domain2.default !== "string") {
+    throw new Error(`access-control: "${name}.default" must be a string (${filePath})`);
+  }
+  const mode = domain2.mode || "open";
+  if (mode === "allowlist" && !domain2.allow) {
+    throw new Error(`access-control: "${name}" uses allowlist mode but "allow" is not defined (${filePath})`);
+  }
+  if (mode === "blocklist" && !domain2.block) {
+    throw new Error(`access-control: "${name}" uses blocklist mode but "block" is not defined (${filePath})`);
+  }
+}
+function isVisible(name, domainConfig) {
+  if (!domainConfig)
+    return true;
+  const mode = domainConfig.mode || "open";
+  const lower = name.toLowerCase();
+  if (mode === "open")
+    return true;
+  if (mode === "allowlist") {
+    const allow = (domainConfig.allow || []).map((s) => s.toLowerCase());
+    const readOnly = (domainConfig.readOnly || []).map((s) => s.toLowerCase());
+    return allow.includes(lower) || readOnly.includes(lower);
+  }
+  if (mode === "blocklist") {
+    const block = (domainConfig.block || []).map((s) => s.toLowerCase());
+    return !block.includes(lower);
+  }
+  return true;
+}
+function isWritable(name, domainConfig) {
+  if (!isVisible(name, domainConfig))
+    return false;
+  const readOnly = (domainConfig?.readOnly || []).map((s) => s.toLowerCase());
+  return !readOnly.includes(name.toLowerCase());
+}
+function getWritableNames(domainConfig) {
+  if (!domainConfig)
+    return null;
+  const mode = domainConfig.mode || "open";
+  if (mode !== "allowlist")
+    return null;
+  const readOnlyLower = new Set((domainConfig.readOnly || []).map((s) => s.toLowerCase()));
+  return (domainConfig.allow || []).filter((s) => !readOnlyLower.has(s.toLowerCase()));
+}
+function resolveWriteTarget(target, domainConfig, targetLabel) {
+  if (!domainConfig)
+    return target;
+  if (!target) {
+    if (domainConfig.default) {
+      return domainConfig.default;
+    }
+    return void 0;
+  }
+  if (!isVisible(target, domainConfig)) {
+    const writable = getWritableNames(domainConfig);
+    const hint = writable ? ` Writable: ${writable.join(", ")}.` : "";
+    throw new Error(`${targetLabel} "${target}" is not available.${hint}`);
+  }
+  if (!isWritable(target, domainConfig)) {
+    const writable = getWritableNames(domainConfig);
+    const hint = writable ? ` Writable: ${writable.join(", ")}.` : "";
+    throw new Error(`${targetLabel} "${target}" is read-only.${hint}`);
+  }
+  return target;
+}
+function validateVisible(name, domainConfig, targetLabel) {
+  if (!domainConfig)
+    return;
+  if (!isVisible(name, domainConfig)) {
+    const mode = domainConfig.mode || "open";
+    if (mode === "allowlist") {
+      const visible = [...domainConfig.allow || [], ...domainConfig.readOnly || []];
+      throw new Error(`${targetLabel} "${name}" is not available. Visible: ${visible.join(", ")}.`);
+    }
+    throw new Error(`${targetLabel} "${name}" is not available.`);
+  }
+}
+function filterResults(result, domainConfig, arrayKey, nameField) {
+  if (!domainConfig)
+    return result;
+  if (!result || !Array.isArray(result[arrayKey]))
+    return result;
+  const filtered = result[arrayKey].filter((item) => {
+    const name = item[nameField];
+    return name == null || isVisible(name, domainConfig);
+  });
+  const updated = { ...result, [arrayKey]: filtered };
+  if ("count" in result) {
+    updated.count = filtered.length;
+  }
+  return updated;
+}
+
 // ../lib/agent-dx.js
 var toolSchemaMap = Object.fromEntries(tools.map((t) => [t.name, t]));
+var READ_FILTER_MAP = {
+  calendar: {
+    list: { arrayKey: "calendars", nameField: "title" },
+    events: { arrayKey: "events", nameField: "calendar" },
+    search: { arrayKey: "events", nameField: "calendar" }
+  },
+  reminder: {
+    lists: { arrayKey: "lists", nameField: "title" },
+    items: { arrayKey: "reminders", nameField: "list" },
+    search: { arrayKey: "reminders", nameField: "list" }
+  }
+};
+var TARGET_FIELD = { calendar: "calendar", reminder: "list" };
+var TARGET_LABEL = { calendar: "Calendar", reminder: "Reminder list" };
+var BATCH_FIELD = { calendar: "events", reminder: "reminders" };
+function applyWritePreCheck(toolName, args, domainConfig) {
+  const field = TARGET_FIELD[toolName];
+  const label = TARGET_LABEL[toolName];
+  if (!field || !label)
+    return;
+  const action = args.action;
+  if (action === "create") {
+    const resolved = resolveWriteTarget(args[field], domainConfig, label);
+    if (resolved !== void 0) {
+      args[field] = resolved;
+    }
+    return;
+  }
+  if (action === "batch_create") {
+    const batchField = BATCH_FIELD[toolName];
+    const items = args[batchField];
+    if (!Array.isArray(items))
+      return;
+    for (const item of items) {
+      const resolved = resolveWriteTarget(item[field], domainConfig, label);
+      if (resolved !== void 0) {
+        item[field] = resolved;
+      }
+    }
+    return;
+  }
+  const otherMutations = /* @__PURE__ */ new Set([
+    "update",
+    "delete",
+    "complete",
+    "batch_complete",
+    "batch_delete"
+  ]);
+  if (otherMutations.has(action) && args[field]) {
+    if (!isVisible(args[field], domainConfig)) {
+      const writable = getWritableNames(domainConfig);
+      const hint = writable ? ` Writable: ${writable.join(", ")}.` : "";
+      throw new Error(`${label} "${args[field]}" is not available.${hint}`);
+    }
+    if (!isWritable(args[field], domainConfig)) {
+      const writable = getWritableNames(domainConfig);
+      const hint = writable ? ` Writable: ${writable.join(", ")}.` : "";
+      throw new Error(`${label} "${args[field]}" is read-only.${hint}`);
+    }
+    return;
+  }
+  if ((action === "events" || action === "items" || action === "search") && args[field]) {
+    validateVisible(args[field], domainConfig, label);
+  }
+}
+function applyReadPostFilter(toolName, action, result, domainConfig) {
+  const toolFilters = READ_FILTER_MAP[toolName];
+  if (!toolFilters)
+    return result;
+  const spec = toolFilters[action];
+  if (!spec)
+    return result;
+  return filterResults(result, domainConfig, spec.arrayKey, spec.nameField);
+}
 function withAgentDX(toolName, handler) {
   return async function agentDXHandler(args, runCLI2) {
     if (args.action === "schema") {
@@ -77965,16 +78400,22 @@ function withAgentDX(toolName, handler) {
         description: schema.description
       };
     }
+    const domainConfig = getDomainConfig(toolName);
+    if (domainConfig) {
+      applyWritePreCheck(toolName, args, domainConfig);
+    }
     if (args.dryRun) {
       if (isMutation(toolName, args.action)) {
         return buildDryRunResponse(toolName, args);
       }
       const result2 = await handler(args, runCLI2);
-      const filtered = applyFieldSelection(result2, args.fields);
+      const acFiltered2 = applyReadPostFilter(toolName, args.action, result2, domainConfig);
+      const filtered = applyFieldSelection(acFiltered2, args.fields);
       return { ...filtered, _dryRunSkipped: true, _note: "dryRun has no effect on read actions" };
     }
     const result = await handler(args, runCLI2);
-    return applyFieldSelection(result, args.fields);
+    const acFiltered = applyReadPostFilter(toolName, args.action, result, domainConfig);
+    return applyFieldSelection(acFiltered, args.fields);
   };
 }
 
@@ -78648,6 +79089,7 @@ var mcpLocations = [
 ];
 var SWIFT_BIN_DIR = findSwiftBinDir(mcpLocations);
 var { runCLI } = createCLIRunner(SWIFT_BIN_DIR);
+initAccessConfig();
 var handlers = {
   calendar: withAgentDX("calendar", handleCalendar),
   reminder: withAgentDX("reminder", handleReminder),
