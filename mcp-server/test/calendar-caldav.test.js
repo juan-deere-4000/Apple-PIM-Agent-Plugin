@@ -7,13 +7,18 @@ const BASE_CONFIG = {
   caldavPassword: "app-specific-password",
 };
 
-function makeClient({ calendars, objectsByUrl }) {
+function makeClient({ calendars, objectsByUrl, expandedObjectsByUrl = null }) {
   return {
     async fetchCalendars() {
       return calendars;
     },
-    async fetchCalendarObjects({ calendar, objectUrls }) {
-      return objectUrls.map((url) => {
+    async fetchCalendarObjects({ calendar, objectUrls, expand }) {
+      if (expand && !objectUrls) {
+        const source = expandedObjectsByUrl || objectsByUrl;
+        return [...source.values()].filter((object) => !calendar || object.url.startsWith(calendar.url));
+      }
+
+      return (objectUrls || []).map((url) => {
         const object = objectsByUrl.get(url);
         if (!object) return null;
         if (calendar && !url.startsWith(calendar.url)) return null;
@@ -286,6 +291,85 @@ END:VCALENDAR`,
     const vevent = updated.getFirstSubcomponent("vevent");
     expect(vevent.getFirstPropertyValue("dtstart").toICALString()).toBe("20260325T110000Z");
     expect(vevent.getFirstPropertyValue("dtend").toICALString()).toBe("20260325T113000Z");
+  });
+
+  it("deletes a server-expanded recurring occurrence without requiring object-url expansion", async () => {
+    const calendar = { displayName: "Daily Plan", url: "https://example.com/daily/" };
+    const objectUrl = `${calendar.url}server-expanded.ics`;
+    const occurrenceKey = "20260409T020000Z";
+    const object = {
+      url: objectUrl,
+      etag: "1",
+      data: `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//en
+BEGIN:VEVENT
+UID:server-expanded
+DTSTAMP:20260321T010000Z
+DTSTART:20260407T020000Z
+DTEND:20260407T023000Z
+RRULE:FREQ=WEEKLY;BYDAY=TU,TH;COUNT=4
+SUMMARY:Server expanded
+END:VEVENT
+END:VCALENDAR`,
+    };
+    const expandedObject = {
+      url: objectUrl,
+      etag: "1",
+      data: `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//en
+BEGIN:VEVENT
+UID:server-expanded
+RECURRENCE-ID:20260407T020000Z
+DTSTAMP:20260321T010000Z
+DTSTART:20260407T020000Z
+DTEND:20260407T023000Z
+SUMMARY:Server expanded
+END:VEVENT
+BEGIN:VEVENT
+UID:server-expanded
+RECURRENCE-ID:20260409T020000Z
+DTSTAMP:20260321T010000Z
+DTSTART:20260409T020000Z
+DTEND:20260409T023000Z
+SUMMARY:Server expanded
+END:VEVENT
+BEGIN:VEVENT
+UID:server-expanded
+RECURRENCE-ID:20260414T020000Z
+DTSTAMP:20260321T010000Z
+DTSTART:20260414T020000Z
+DTEND:20260414T023000Z
+SUMMARY:Server expanded
+END:VEVENT
+BEGIN:VEVENT
+UID:server-expanded
+RECURRENCE-ID:20260416T020000Z
+DTSTAMP:20260321T010000Z
+DTSTART:20260416T020000Z
+DTEND:20260416T023000Z
+SUMMARY:Server expanded
+END:VEVENT
+END:VCALENDAR`,
+    };
+    const objectsByUrl = new Map([[objectUrl, object]]);
+    const expandedObjectsByUrl = new Map([[objectUrl, expandedObject]]);
+    const handler = createCalDAVCalendarHandler(BASE_CONFIG, {
+      client: makeClient({ calendars: [calendar], objectsByUrl, expandedObjectsByUrl }),
+    });
+
+    const result = await handler({
+      action: "delete",
+      id: `${objectUrl}#${encodeURIComponent(occurrenceKey)}`,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.deletedEvent.id).toBe(`${objectUrl}#${encodeURIComponent(occurrenceKey)}`);
+
+    const updated = ICAL.Component.fromString(objectsByUrl.get(objectUrl).data);
+    const master = updated.getFirstSubcomponent("vevent");
+    expect(master.getAllProperties("exdate").map((property) => property.getFirstValue().toICALString())).toContain(occurrenceKey);
   });
 
   it("deletes a single recurring occurrence without treating absence as an error", async () => {
