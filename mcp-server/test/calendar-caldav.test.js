@@ -43,6 +43,53 @@ function makeClient({ calendars, objectsByUrl }) {
 }
 
 describe("createCalDAVCalendarHandler", () => {
+  it("formats exdate using the master dtstart timezone form", async () => {
+    const calendar = { displayName: "Daily Plan", url: "https://example.com/daily/" };
+    const objectUrl = `${calendar.url}bangkok-series.ics`;
+    const occurrenceKey = "20260331T020000Z";
+    const object = {
+      url: objectUrl,
+      etag: "1",
+      data: `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//en
+BEGIN:VEVENT
+UID:bangkok-series
+DTSTAMP:20260321T010000Z
+DTSTART;TZID=Asia/Bangkok:20260325T090000
+DTEND;TZID=Asia/Bangkok:20260325T093000
+RRULE:FREQ=WEEKLY;COUNT=4
+SUMMARY:Bangkok series
+END:VEVENT
+BEGIN:VEVENT
+UID:bangkok-series
+RECURRENCE-ID:20260331T020000Z
+DTSTAMP:20260321T010000Z
+DTSTART:20260331T020000Z
+DTEND:20260331T023000Z
+SUMMARY:Bangkok series
+END:VEVENT
+END:VCALENDAR`,
+    };
+    const objectsByUrl = new Map([[objectUrl, object]]);
+    const handler = createCalDAVCalendarHandler(BASE_CONFIG, {
+      client: makeClient({ calendars: [calendar], objectsByUrl }),
+    });
+
+    const result = await handler({
+      action: "delete",
+      id: `${objectUrl}#${encodeURIComponent(occurrenceKey)}`,
+    });
+
+    expect(result.success).toBe(true);
+
+    const updated = ICAL.Component.fromString(objectsByUrl.get(objectUrl).data);
+    const master = updated.getFirstSubcomponent("vevent");
+    const exdate = master.getFirstProperty("exdate");
+    expect(exdate.getFirstParameter("TZID") || exdate.getFirstParameter("tzid")).toBe("Asia/Bangkok");
+    expect(exdate.getFirstValue().toICALString()).toBe("20260331T090000");
+  });
+
   it("deletes this and future recurring occurrences by truncating the series", async () => {
     const calendar = { displayName: "Daily Plan", url: "https://example.com/daily/" };
     const objectUrl = `${calendar.url}run.ics`;
