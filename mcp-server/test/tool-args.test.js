@@ -53,10 +53,11 @@ describe("buildCalendarCreateArgs", () => {
 });
 
 describe("buildCalendarUpdateArgs", () => {
-  it("maps futureEvents and recurrence args for calendar update", () => {
+  it("maps calendar, duration, futureEvents and recurrence args for calendar update", () => {
     const args = buildCalendarUpdateArgs({
       id: "evt_1",
       calendar: "Shared",
+      duration: 45,
       recurrence: { frequency: "monthly", daysOfTheMonth: [1, 15] },
       futureEvents: true,
     });
@@ -64,6 +65,8 @@ describe("buildCalendarUpdateArgs", () => {
       "update",
       "--id",
       "evt_1",
+      "--duration",
+      "45",
       "--calendar",
       "Shared",
       "--recurrence",

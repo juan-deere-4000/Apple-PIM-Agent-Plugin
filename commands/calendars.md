@@ -46,7 +46,7 @@ Use `calendar` with action `batch_create` to create multiple events in one trans
 ### Update Event
 Use `calendar` with action `update` to modify an existing event:
 - Required: `id` (event ID from list/search)
-- Optional: `title`, `start`, `end`, `location`, `notes`, `url`, `recurrence`, `futureEvents`
+- Optional: `title`, `start`, `end` OR `duration` (minutes), `location`, `notes`, `url`, `recurrence`, `futureEvents`
 - For recurring events: use `futureEvents: true` to apply changes to all future occurrences
 - To remove recurrence: set `recurrence.frequency` to `"none"`
 
@@ -112,6 +112,7 @@ Accept flexible date formats:
 **Update an event:**
 ```
 /apple-pim:calendars update --id <event_id> --title "Updated Title"
+/apple-pim:calendars update --id <event_id> --start "2026-03-25 11:00" --duration 45
 ```
 
 **Delete an event:**

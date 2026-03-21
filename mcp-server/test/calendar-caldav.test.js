@@ -160,6 +160,138 @@ END:VCALENDAR`,
     expect(vevent.getFirstPropertyValue("dtend").toICALString()).toBe("20260324");
   });
 
+  it("preserves duration when rescheduling a timed event by start only", async () => {
+    const calendar = { displayName: "Daily Plan", url: "https://example.com/daily/" };
+    const objectUrl = `${calendar.url}consult.ics`;
+    const object = {
+      url: objectUrl,
+      etag: "1",
+      data: `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//en
+BEGIN:VEVENT
+UID:consult
+DTSTAMP:20260321T010000Z
+DTSTART:20260325T090000Z
+DTEND:20260325T094500Z
+SUMMARY:Consult
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Reminder
+TRIGGER:-PT15M
+END:VALARM
+END:VEVENT
+END:VCALENDAR`,
+    };
+    const objectsByUrl = new Map([[objectUrl, object]]);
+    const handler = createCalDAVCalendarHandler(BASE_CONFIG, {
+      client: makeClient({ calendars: [calendar], objectsByUrl }),
+    });
+
+    const result = await handler({
+      action: "update",
+      id: objectUrl,
+      start: "2026-03-25T11:00:00Z",
+    });
+
+    expect(result.success).toBe(true);
+
+    const updated = ICAL.Component.fromString(objectsByUrl.get(objectUrl).data);
+    const vevent = updated.getFirstSubcomponent("vevent");
+    expect(vevent.getFirstPropertyValue("dtstart").toICALString()).toBe("20260325T110000Z");
+    expect(vevent.getFirstPropertyValue("dtend").toICALString()).toBe("20260325T114500Z");
+    expect(vevent.getAllSubcomponents("valarm")).toHaveLength(1);
+  });
+
+  it("supports start plus duration updates without needing an explicit end", async () => {
+    const calendar = { displayName: "Daily Plan", url: "https://example.com/daily/" };
+    const objectUrl = `${calendar.url}focus.ics`;
+    const object = {
+      url: objectUrl,
+      etag: "1",
+      data: `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//en
+BEGIN:VEVENT
+UID:focus
+DTSTAMP:20260321T010000Z
+DTSTART:20260325T090000Z
+DTEND:20260325T094500Z
+SUMMARY:Focus
+END:VEVENT
+END:VCALENDAR`,
+    };
+    const objectsByUrl = new Map([[objectUrl, object]]);
+    const handler = createCalDAVCalendarHandler(BASE_CONFIG, {
+      client: makeClient({ calendars: [calendar], objectsByUrl }),
+    });
+
+    const result = await handler({
+      action: "update",
+      id: objectUrl,
+      start: "2026-03-25T11:00:00Z",
+      duration: 30,
+    });
+
+    expect(result.success).toBe(true);
+
+    const updated = ICAL.Component.fromString(objectsByUrl.get(objectUrl).data);
+    const vevent = updated.getFirstSubcomponent("vevent");
+    expect(vevent.getFirstPropertyValue("dtstart").toICALString()).toBe("20260325T110000Z");
+    expect(vevent.getFirstPropertyValue("dtend").toICALString()).toBe("20260325T113000Z");
+  });
+
+  it("deletes a single recurring occurrence without treating absence as an error", async () => {
+    const calendar = { displayName: "Daily Plan", url: "https://example.com/daily/" };
+    const objectUrl = `${calendar.url}standup.ics`;
+    const occurrenceKey = "20260325T083000Z";
+    const object = {
+      url: objectUrl,
+      etag: "1",
+      data: `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//en
+BEGIN:VEVENT
+UID:standup
+DTSTAMP:20260321T010000Z
+DTSTART:20260323T083000Z
+DTEND:20260323T090000Z
+RRULE:FREQ=DAILY;COUNT=4
+SUMMARY:Standup
+END:VEVENT
+BEGIN:VEVENT
+UID:standup
+RECURRENCE-ID:20260325T083000Z
+DTSTAMP:20260321T010000Z
+DTSTART:20260325T100000Z
+DTEND:20260325T103000Z
+SUMMARY:Standup moved
+END:VEVENT
+END:VCALENDAR`,
+    };
+    const objectsByUrl = new Map([[objectUrl, object]]);
+    const handler = createCalDAVCalendarHandler(BASE_CONFIG, {
+      client: makeClient({ calendars: [calendar], objectsByUrl }),
+    });
+
+    const result = await handler({
+      action: "delete",
+      id: `${objectUrl}#${encodeURIComponent(occurrenceKey)}`,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.deletedEvent.id).toBe(`${objectUrl}#${encodeURIComponent(occurrenceKey)}`);
+
+    const updated = ICAL.Component.fromString(objectsByUrl.get(objectUrl).data);
+    const master = updated.getFirstSubcomponent("vevent");
+    expect(master.getAllProperties("exdate").map((property) => property.getFirstValue().toICALString())).toContain(occurrenceKey);
+    expect(
+      updated
+        .getAllSubcomponents("vevent")
+        .some((component) => component.getFirstPropertyValue("recurrence-id")?.toICALString() === occurrenceKey)
+    ).toBe(false);
+  });
+
   it("does not silently default to an arbitrary calendar when Daily Plan and Shared are absent", async () => {
     const calendar = { displayName: "Work", url: "https://example.com/work/" };
     const handler = createCalDAVCalendarHandler(BASE_CONFIG, {
