@@ -1,7 +1,7 @@
 /**
  * OpenClaw plugin entry for Apple PIM CLI Tools.
  *
- * Registers 5 tool factories that spawn the Swift CLIs directly (no MCP server).
+ * Registers 5 tool factories with direct handlers (no MCP server).
  * Uses the factory pattern so each agent gets per-workspace config resolution.
  * Supports per-call environment isolation via configDir/profile parameters
  * and automatic workspace convention discovery.
@@ -28,6 +28,13 @@ interface PluginConfig {
   profile?: string;
   configDir?: string;
   accessFile?: string;
+  calendarBackend?: string;
+  caldavServerUrl?: string;
+  caldavUsername?: string;
+  caldavPassword?: string;
+  caldavPasswordEnvVar?: string;
+  calendarAliasesFile?: string;
+  caldavTimeoutMs?: number;
 }
 
 // Tool args always include optional isolation params
@@ -94,8 +101,8 @@ const TOOL_NAME_MAP: Record<string, string> = {
   "apple-pim": "apple_pim_system",
 };
 
-// Map MCP tool names to handler functions (wrapped with agent DX features)
-const HANDLERS: Record<string, (args: ToolArgs, runCLI: (cli: string, args: string[]) => Promise<object>) => Promise<object>> = {
+// Map MCP tool names to default handler functions (wrapped with agent DX features)
+const HANDLERS: Record<string, (args: ToolArgs, runCLI: (cli: string, args: string[]) => Promise<object>, runtime?: unknown) => Promise<object>> = {
   "calendar": withAgentDX("calendar", handleCalendar) as typeof handleCalendar,
   "reminder": withAgentDX("reminder", handleReminder) as typeof handleReminder,
   "contact": withAgentDX("contact", handleContact) as typeof handleContact,
@@ -104,27 +111,29 @@ const HANDLERS: Record<string, (args: ToolArgs, runCLI: (cli: string, args: stri
 };
 
 /**
- * Resolve the binary directory using a discovery chain:
+ * Resolve the binary directory for reminder/contact/mail CLIs using a discovery chain:
  * 1. Plugin config binDir
  * 2. Env var APPLE_PIM_BIN_DIR
- * 3. PATH lookup (which calendar-cli)
+ * 3. PATH lookup (which reminder-cli)
  * 4. ~/.local/bin/ (setup.sh --install target)
  */
 function resolveBinDir(config?: PluginConfig): string {
+  const requiredBins = ["reminder-cli", "contacts-cli", "mail-cli"];
+
   // 1. Plugin config
-  if (config?.binDir && existsSync(join(config.binDir, "calendar-cli"))) {
+  if (config?.binDir && requiredBins.every((bin) => existsSync(join(config.binDir as string, bin)))) {
     return config.binDir;
   }
 
   // 2. Env var
   const envBinDir = process.env.APPLE_PIM_BIN_DIR;
-  if (envBinDir && existsSync(join(envBinDir, "calendar-cli"))) {
+  if (envBinDir && requiredBins.every((bin) => existsSync(join(envBinDir, bin)))) {
     return envBinDir;
   }
 
   // 3. PATH lookup (execFileSync avoids shell injection)
   try {
-    const whichResult = execFileSync("which", ["calendar-cli"], { encoding: "utf8" }).trim();
+    const whichResult = execFileSync("which", ["reminder-cli"], { encoding: "utf8" }).trim();
     if (whichResult) {
       return dirname(whichResult);
     }
@@ -197,9 +206,9 @@ export default function activate(context: OpenClawContext): void {
 
   for (const tool of tools) {
     const openclawName = TOOL_NAME_MAP[tool.name];
-    const handler = HANDLERS[tool.name];
+    const defaultHandler = HANDLERS[tool.name];
 
-    if (!openclawName || !handler) continue;
+    if (!openclawName || !defaultHandler) continue;
 
     context.registerTool((ctx: OpenClawPluginToolContext) => {
       const workspaceDir = ctx.workspaceDir;
@@ -227,9 +236,20 @@ export default function activate(context: OpenClawContext): void {
           // Per-call environment isolation — never mutates process.env
           const envOverrides = resolveEnvOverrides(toolArgs, config, workspaceDir);
           const { runCLI } = createCLIRunner(binDir, envOverrides);
+          const handler = defaultHandler;
+          const calendarBackend = tool.name === "calendar"
+            ? "icloud-caldav"
+            : null;
 
           try {
-            const result = await handler(toolArgs, runCLI);
+            const rawResult = await handler(toolArgs, runCLI, {
+              pluginConfig: config,
+              workspaceDir,
+              toolContext: ctx,
+            });
+            const result = calendarBackend && rawResult && typeof rawResult === "object" && !Array.isArray(rawResult)
+              ? { backend: calendarBackend, ...rawResult }
+              : rawResult;
 
             // Apply datamarking for prompt injection defense
             const markedResult = markToolResult(result, tool.name);
@@ -240,8 +260,11 @@ export default function activate(context: OpenClawContext): void {
             };
           } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
+            const payload = calendarBackend
+              ? { success: false, backend: calendarBackend, error: message }
+              : { success: false, error: message };
             return {
-              content: [{ type: "text" as const, text: JSON.stringify({ success: false, error: message }, null, 2) }],
+              content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
             };
           }
         },

@@ -135,7 +135,7 @@ describe("Category 1: Tool Call Correctness", () => {
 
   describe("relative date resolution (lastDays)", () => {
     it("computes --from as a date string for lastDays", async () => {
-      const mockCLI = createMockCLI({ "calendar-cli:events": { events: [] } });
+      const mockCLI = createMockCLI({ "calendar:events": { events: [] } });
       await handleCalendar({ action: "events", lastDays: 7 }, mockCLI);
 
       const callArgs = mockCLI.mock.calls[0][1];
@@ -300,6 +300,26 @@ describe("Category 1: Tool Call Correctness", () => {
         .rejects.toThrow("cannot be empty");
     });
 
+    it("calendar batch_create propagates top-level calendar to each event", async () => {
+      const mockCLI = createMockCLI({ "calendar:batch-create": { success: true } });
+      await handleCalendar(
+        {
+          action: "batch_create",
+          calendar: "Shared",
+          events: [
+            { title: "One", start: "2026-03-23T14:00:00", end: "2026-03-23T15:00:00" },
+            { title: "Two", start: "2026-03-24T14:00:00", end: "2026-03-24T15:00:00" },
+          ],
+        },
+        mockCLI,
+      );
+
+      const callArgs = mockCLI.mock.calls[0][1];
+      const jsonIndex = callArgs.indexOf("--json");
+      const payload = JSON.parse(callArgs[jsonIndex + 1]);
+      expect(payload.map((event) => event.calendar)).toEqual(["Shared", "Shared"]);
+    });
+
     it("reminder batch_create throws with empty reminders", async () => {
       const mockCLI = createMockCLI({});
       await expect(handleReminder({ action: "batch_create", reminders: [] }, mockCLI))
@@ -422,7 +442,7 @@ describe("Category 1: Tool Call Correctness", () => {
       });
       initAccessConfig(path);
 
-      const mockCLI = createMockCLI({ "calendar-cli:create": { success: true } });
+      const mockCLI = createMockCLI({ "calendar:create": { success: true } });
       const wrapped = withAgentDX("calendar", handleCalendar);
       await wrapped({ action: "create", title: "Test", start: "2026-03-20T10:00:00" }, mockCLI);
 
@@ -521,7 +541,7 @@ describe("Category 1: Tool Call Correctness", () => {
       initAccessConfig(path);
 
       const mockCLI = createMockCLI({
-        "calendar-cli:events": {
+        "calendar:events": {
           success: true,
           events: [
             { id: "e1", title: "Meeting", calendar: "Work" },
@@ -559,17 +579,45 @@ describe("Category 1: Tool Call Correctness", () => {
       });
       initAccessConfig(path);
 
-      const mockCLI = createMockCLI({ "calendar-cli:update": { success: true } });
+      const mockCLI = createMockCLI({ "calendar:update": { success: true } });
       const wrapped = withAgentDX("calendar", handleCalendar);
       // Should not throw
       await wrapped({ action: "update", id: "evt_1", title: "Updated", calendar: "Work" }, mockCLI);
       expect(mockCLI.mock.calls).toHaveLength(1);
+      const callArgs = mockCLI.mock.calls[0][1];
+      expect(argsPairPresent(callArgs, "--calendar", "Work")).toBe(true);
+    });
+
+    it("calendar batch_create injects top-level calendar from access config into each event", async () => {
+      const path = writeACConfig({
+        calendars: { mode: "allowlist", allow: ["Work", "Shared"], default: "Work" },
+      });
+      initAccessConfig(path);
+
+      const mockCLI = createMockCLI({ "calendar:batch-create": { success: true } });
+      const wrapped = withAgentDX("calendar", handleCalendar);
+      await wrapped(
+        {
+          action: "batch_create",
+          calendar: "Shared",
+          events: [
+            { title: "One", start: "2026-03-23T14:00:00", end: "2026-03-23T15:00:00" },
+            { title: "Two", start: "2026-03-24T14:00:00", end: "2026-03-24T15:00:00" },
+          ],
+        },
+        mockCLI,
+      );
+
+      const callArgs = mockCLI.mock.calls[0][1];
+      const jsonIndex = callArgs.indexOf("--json");
+      const payload = JSON.parse(callArgs[jsonIndex + 1]);
+      expect(payload.map((event) => event.calendar)).toEqual(["Shared", "Shared"]);
     });
 
     it("no access config means open mode (no filtering)", async () => {
       // initAccessConfig not called — default null config
       const mockCLI = createMockCLI({
-        "calendar-cli:events": {
+        "calendar:events": {
           success: true,
           events: [{ id: "e1", title: "A", calendar: "Anything" }],
           count: 1,
