@@ -16,6 +16,7 @@ package-lock.json
 # Local configuration
 *.local.md
 notes.md
+specs/
 
 # Astro build cache
 site/.astro/
