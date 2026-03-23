@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import ICAL from "ical.js";
 import { createCalDAVCalendarHandler } from "../../lib/handlers/calendar-caldav.js";
+import { buildEventsRange, buildSearchRange } from "../../lib/handlers/calendar-caldav/operations.js";
 
 const BASE_CONFIG = {
   caldavUsername: "test@example.com",
@@ -12,10 +13,26 @@ function makeClient({ calendars, objectsByUrl, expandedObjectsByUrl = null }) {
     async fetchCalendars() {
       return calendars;
     },
-    async fetchCalendarObjects({ calendar, objectUrls, expand }) {
+    async fetchCalendarObjects({ calendar, objectUrls, expand, timeRange }) {
       if (expand && !objectUrls) {
         const source = expandedObjectsByUrl || objectsByUrl;
-        return [...source.values()].filter((object) => !calendar || object.url.startsWith(calendar.url));
+        const rangeStart = timeRange?.start ? new Date(timeRange.start) : null;
+        const rangeEnd = timeRange?.end ? new Date(timeRange.end) : null;
+        return [...source.values()]
+          .filter((object) => !calendar || object.url.startsWith(calendar.url))
+          .filter((object) => {
+            if (!rangeStart && !rangeEnd) return true;
+            const root = ICAL.Component.fromString(object.data);
+            return root.getAllSubcomponents("vevent").some((component) => {
+              const event = new ICAL.Event(component);
+              const start = event.startDate?.toJSDate();
+              const end = event.endDate?.toJSDate() || start;
+              if (!start || !end) return false;
+              if (rangeStart && end <= rangeStart) return false;
+              if (rangeEnd && start >= rangeEnd) return false;
+              return true;
+            });
+          });
       }
 
       return (objectUrls || []).map((url) => {
@@ -48,6 +65,117 @@ function makeClient({ calendars, objectsByUrl, expandedObjectsByUrl = null }) {
 }
 
 describe("createCalDAVCalendarHandler", () => {
+  it("builds full-day event ranges for date-only from/to", () => {
+    const range = buildEventsRange({ from: "2026-03-23", to: "2026-03-23" });
+
+    expect(range.start.getFullYear()).toBe(2026);
+    expect(range.start.getMonth()).toBe(2);
+    expect(range.start.getDate()).toBe(23);
+    expect(range.start.getHours()).toBe(0);
+    expect(range.start.getMinutes()).toBe(0);
+
+    expect(range.end.getFullYear()).toBe(2026);
+    expect(range.end.getMonth()).toBe(2);
+    expect(range.end.getDate()).toBe(24);
+    expect(range.end.getHours()).toBe(0);
+    expect(range.end.getMinutes()).toBe(0);
+  });
+
+  it("preserves explicit times in search ranges", () => {
+    const range = buildSearchRange({ from: "2026-03-23 14:00", to: "2026-03-23 18:00" });
+
+    expect(range.start.getHours()).toBe(14);
+    expect(range.start.getMinutes()).toBe(0);
+    expect(range.end.getHours()).toBe(18);
+    expect(range.end.getMinutes()).toBe(0);
+  });
+
+  it("includes same-day morning events for date-only event queries", async () => {
+    const calendar = { displayName: "Daily Plan", url: "https://example.com/daily/" };
+    const runUrl = `${calendar.url}run.ics`;
+    const adminUrl = `${calendar.url}admin.ics`;
+    const objectsByUrl = new Map([
+      [runUrl, {
+        url: runUrl,
+        etag: "1",
+        data: `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//en
+BEGIN:VEVENT
+UID:run
+DTSTAMP:20260321T010000Z
+DTSTART:20260323T083000
+DTEND:20260323T090000
+SUMMARY:Run
+END:VEVENT
+END:VCALENDAR`,
+      }],
+      [adminUrl, {
+        url: adminUrl,
+        etag: "1",
+        data: `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//en
+BEGIN:VEVENT
+UID:admin
+DTSTAMP:20260321T010000Z
+DTSTART:20260323T090000
+DTEND:20260323T160000
+SUMMARY:Work: Admin
+END:VEVENT
+END:VCALENDAR`,
+      }],
+    ]);
+    const handler = createCalDAVCalendarHandler(BASE_CONFIG, {
+      client: makeClient({ calendars: [calendar], objectsByUrl }),
+    });
+
+    const result = await handler({
+      action: "events",
+      calendar: "Daily Plan",
+      from: "2026-03-23",
+      to: "2026-03-23",
+    });
+
+    expect(result.dateRange.from).toContain("T00:00:00");
+    expect(result.dateRange.to).toContain("T00:00:00");
+    expect(result.events.map((event) => event.title)).toEqual(["Run", "Work: Admin"]);
+  });
+
+  it("includes same-day morning events for date-only search queries", async () => {
+    const calendar = { displayName: "Daily Plan", url: "https://example.com/daily/" };
+    const runUrl = `${calendar.url}run.ics`;
+    const objectsByUrl = new Map([[runUrl, {
+      url: runUrl,
+      etag: "1",
+      data: `BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//test//en
+BEGIN:VEVENT
+UID:run
+DTSTAMP:20260321T010000Z
+DTSTART:20260323T083000
+DTEND:20260323T090000
+SUMMARY:Run
+DESCRIPTION:17min easy
+END:VEVENT
+END:VCALENDAR`,
+    }]]);
+    const handler = createCalDAVCalendarHandler(BASE_CONFIG, {
+      client: makeClient({ calendars: [calendar], objectsByUrl }),
+    });
+
+    const result = await handler({
+      action: "search",
+      calendar: "Daily Plan",
+      query: "run",
+      from: "2026-03-23",
+      to: "2026-03-23",
+    });
+
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0].title).toBe("Run");
+  });
   it("formats exdate using the master dtstart timezone form", async () => {
     const calendar = { displayName: "Daily Plan", url: "https://example.com/daily/" };
     const objectUrl = `${calendar.url}bangkok-series.ics`;
